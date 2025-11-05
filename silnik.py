@@ -190,6 +190,7 @@ class GRA:
             else:
                 print(f"Runda: {runda}")
                 from IPython.display import clear_output, display, HTML
+                display(HTML("<style>pre, code {font-family: 'Courier New', monospace !important;}</style>"))
             self.wyswietl_plansze(self.plansza, pokaz_legende=True)
             time.sleep(2)
             pierwsza_runda = False
