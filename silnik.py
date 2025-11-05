@@ -189,7 +189,7 @@ class GRA:
                 print(f"\033[KRunda: {runda}")
             else:
                 print(f"Runda: {runda}")
-                from IPython.display import clear_output
+                from IPython.display import clear_output, display, HTML
             self.wyswietl_plansze(self.plansza, pokaz_legende=True)
             time.sleep(2)
             pierwsza_runda = False
@@ -219,6 +219,7 @@ class GRA:
 
                     if notebook:
                         print(f"Runda: {runda} - KONIEC GRY!")
+                        display(HTML("<style>pre, code {font-family: 'Courier New', monospace !important;}</style>"))
                         self.wyswietl_plansze(plansza_do_wyswietlenia, pokaz_legende=False, notebook=True)
                         print(f"\n🎉 Gratulacje! Wygrywa Bot {poprzedni_gracz}! 🎉\n")
                     else:
@@ -280,19 +281,25 @@ class GRA:
         if plansza is None:
             plansza = self.plansza
 
+        # Kolory ANSI
+        RESET = '\033[0m'
+        RED = '\033[91m'      # Gracz (1)
+        BLUE = '\033[94m'     # Przeciwnik (2)
+        GRAY = '\033[90m'     # Białe pola
+
         # Symbole
         EMPTY_DARK = '·'
         EMPTY_LIGHT = ' '
         PIECE = '●'
         KING = '▣'
 
-        # Mapowanie wartości na symbole
-        symbole_text = {
-            0: EMPTY_DARK,
-            1: PIECE,
-            2: PIECE,
-            3: KING,
-            4: KING
+        # Mapowanie wartości na symbole i kolory
+        symbole = {
+            0: (EMPTY_DARK, ''),           # Puste ciemne pole
+            1: (PIECE, BLUE),                # Pion gracza
+            2: (PIECE, RED),               # Pion przeciwnika
+            3: (KING, BLUE),              # Król gracza
+            4: (KING, RED)                 # Król przeciwnika
         }
 
         # Tworzenie pełnej planszy 8x8
@@ -301,101 +308,51 @@ class GRA:
         # Wypełnianie ciemnych pól
         for row in range(8):
             for col_idx in range(4):
+                # Ciemne pola są na różnych pozycjach w zależności od parzystości wiersza
                 if row % 2 == 0:
+                    # Parzyste wiersze: ciemne pola na kolumnach 1, 3, 5, 7
                     col = col_idx * 2 + 1
                 else:
+                    # Nieparzyste wiersze: ciemne pola na kolumnach 0, 2, 4, 6
                     col = col_idx * 2
+
                 pelna_plansza[row][col] = plansza[row][col_idx]
 
-        if notebook:
-            # Wyświetlanie HTML dla Google Colab
-            from IPython.display import display, HTML
-            
-            kolory = {
-                0: '#666',      # Puste ciemne pole
-                1: '#4A90E2',   # Pion gracza (niebieski)
-                2: '#E74C3C',   # Pion przeciwnika (czerwony)
-                3: '#4A90E2',   # Król gracza
-                4: '#E74C3C'    # Król przeciwnika
-            }
+        # Wyświetlanie
+        clear_line = "" if notebook else "\033[K"
 
-            html = '<div style="font-family: \'Courier New\', Courier, monospace; font-size: 16px; line-height: 1.2; white-space: pre;">\n'
-            html += '\n╔═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╗\n'
+        print(f"\n{clear_line}╔═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╗")
 
-            for row in range(8):
-                html += '║'
-                for col in range(8):
-                    if pelna_plansza[row][col] is not None:
-                        val = pelna_plansza[row][col]
-                        symbol = symbole_text[val]
-                        color = kolory[val]
-                        html += f' <span style="color: {color};">{symbol}</span> '
-                    else:
-                        html += f' <span style="color: #999;">{EMPTY_LIGHT}</span> '
+        for row in range(8):
+            print(f"{clear_line}║", end="")
+            for col in range(8):
+                if pelna_plansza[row][col] is not None:
+                    # Ciemne pole z figurą lub puste
+                    val = pelna_plansza[row][col]
+                    symbol, color = symbole[val]
+                    print(f" {color}{symbol}{RESET} ", end="")
+                else:
+                    # Białe pole
+                    print(f" {GRAY}{EMPTY_LIGHT}{RESET} ", end="")
 
-                    if col < 7:
-                        html += '│'
+                if col < 7:
+                    print("│", end="")
 
-                html += f'║ {row}\n'
+            print("║", end="")
+            print(f" {row}{clear_line}")  # Numeracja wierszy + wyczyść resztę linii
 
-                if row < 7:
-                    html += '╟───┼───┼───┼───┼───┼───┼───┼───╢\n'
+            if row < 7:
+                print(f"{clear_line}╟───┼───┼───┼───┼───┼───┼───┼───╢")
 
-            html += '╚═══╧═══╧═══╧═══╧═══╧═══╧═══╧═══╝\n'
-            html += '  0   1   2   3   4   5   6   7\n'
+        print(f"{clear_line}╚═══╧═══╧═══╧═══╧═══╧═══╧═══╧═══╝")
+        print(f"{clear_line}  0   1   2   3   4   5   6   7")  # Numeracja kolumn
 
-            if pokaz_legende:
-                html += '\nLegenda: '
-                html += f'<span style="color: #4A90E2;">{PIECE}</span> Twój pion  '
-                html += f'<span style="color: #E74C3C;">{PIECE}</span> Przeciwnik  '
-                html += f'<span style="color: #4A90E2;">{KING}</span> Twój król  '
-                html += f'<span style="color: #E74C3C;">{KING}</span> Król przeciwnika\n'
-
-            html += '</div>'
-            display(HTML(html))
-
+        # Legenda (opcjonalna)
+        if pokaz_legende:
+            print(f"{clear_line}\nLegenda: {BLUE}{PIECE}{RESET} Twój pion  {RED}{PIECE}{RESET} Przeciwnik  "
+                f"{BLUE}{KING}{RESET} Twój król  {RED}{KING}{RESET} Król przeciwnika")
         else:
-            # Wyświetlanie ANSI dla terminala
-            RESET = '\033[0m'
-            RED = '\033[91m'
-            BLUE = '\033[94m'
-            GRAY = '\033[90m'
-
-            symbole_ansi = {
-                0: (EMPTY_DARK, ''),
-                1: (PIECE, BLUE),
-                2: (PIECE, RED),
-                3: (KING, BLUE),
-                4: (KING, RED)
-            }
-
-            clear_line = "\033[K"
-            print(f"\n{clear_line}╔═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╗")
-
-            for row in range(8):
-                print(f"{clear_line}║", end="")
-                for col in range(8):
-                    if pelna_plansza[row][col] is not None:
-                        val = pelna_plansza[row][col]
-                        symbol, color = symbole_ansi[val]
-                        print(f" {color}{symbol}{RESET} ", end="")
-                    else:
-                        print(f" {GRAY}{EMPTY_LIGHT}{RESET} ", end="")
-
-                    if col < 7:
-                        print("│", end="")
-
-                print("║", end="")
-                print(f" {row}{clear_line}")
-
-                if row < 7:
-                    print(f"{clear_line}╟───┼───┼───┼───┼───┼───┼───┼───╢")
-
-            print(f"{clear_line}╚═══╧═══╧═══╧═══╧═══╧═══╧═══╧═══╝")
-            print(f"{clear_line}  0   1   2   3   4   5   6   7")
-
-            if pokaz_legende:
-                print(f"{clear_line}\nLegenda: {BLUE}{PIECE}{RESET} Twój pion  {RED}{PIECE}{RESET} Przeciwnik  "
-                    f"{BLUE}{KING}{RESET} Twój król  {RED}{KING}{RESET} Król przeciwnika")
-            else:
+            # Wydrukuj pustą linię zamiast legendy (żeby zachować tę samą liczbę linii)
+            if not notebook:
                 print(clear_line)
+
