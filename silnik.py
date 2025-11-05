@@ -18,8 +18,15 @@ class GRA:
         ])
 
         # Ładowanie botów
-        self.bot1 = self._zaladuj_bota(bot1)
-        self.bot2 = self._zaladuj_bota(bot2)
+        if type(bot1) == str:
+            self.bot1 = self._zaladuj_bota(bot1)
+        else:
+            self.bot1 = bot1
+
+        if type(bot2) == str:
+            self.bot2 = self._zaladuj_bota(bot2)
+        else:
+            self.bot2 = bot2
 
     def _zaladuj_bota(self, nazwa_bota):
         """
