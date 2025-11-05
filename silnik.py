@@ -264,6 +264,7 @@ class GRA:
 
                 if notebook:
                     print(f"Runda: {runda}")
+                    display(HTML("<style>pre, code {font-family: 'Courier New', monospace !important;}</style>"))
                     self.wyswietl_plansze(plansza_do_wyswietlenia, pokaz_legende=pierwsza_runda, notebook=True)
                 else:
                     print(f"\033[KRunda: {runda}")
