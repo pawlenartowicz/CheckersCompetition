@@ -97,8 +97,9 @@ ruchy jest listą legalnych legalnych ruchów — krotek, z pozycją na początk
 - Funkcja określająca legalne ruchy będzie dostępna publicznie, zespoły mogą jej używać w swoim kodzie 'as is', lub zoptymalizować.
 
 ## Terminarz
-- 4.11 GITHUB + Google Colab + Random-Bot
-- 18.11 Więcej botów
+- 4.11 GITHUB + Google Colab + Random-Bot (1 dzień opóźnienia)
+- 11.11 Bicia i ruchy królem, dziedziczenie klasy (możliwość korzystania z funkcji z głównej klasy)
+- 25.11 Więcej botów
 - 16.12 Testy
 - 20.01 Turniej
 Powstanie po wykładzie we wtorek, 28.10
