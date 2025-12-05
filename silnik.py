@@ -52,32 +52,116 @@ class GRA:
     def znajdz_legalne_ruchy(self, plansza):
         """
         Znajduje legalne ruchy dla gracza.
-        Tylko zwykłe ruchy, na razie bez bicia i promocji.
-        
+        Najpierw sprawdza bicia - jeśli są dostępne, zwraca tylko bicia.
+        Jeśli nie ma bić, zwraca zwykłe ruchy.
+
         Args:
             plansza: numpy array 4x8 reprezentujący ciemne pola
-            
+
         Returns:
             lista krotek ((start_row, start_col), (end_row, end_col))
         """
+        bicia = []
         legalne_ruchy = []
         rows, cols = plansza.shape
-        
+
+        # Najpierw sprawdź czy są dostępne bicia
         for row in range(rows):
             for col in range(cols):
                 piece = plansza[row, col]
-                
-                # Sprawdź pionki gracza
+
+                # Sprawdź bicia dla pionków gracza
                 if piece == 1:  # Zwykły pion gracza
-                    ruchy = self._ruchy_zwyklego_piona(plansza, row, col)
+                    bicia_piona = self._bicia_piona(plansza, row, col)
+                    bicia.extend(bicia_piona)
+                elif piece == 3:  # Król gracza
+                    bicia_krola = self._bicia_krola(plansza, row, col)
+                    bicia.extend(bicia_krola)
+
+        # Jeśli są bicia, zwróć tylko bicia (bicie jest obowiązkowe)
+        if len(bicia) > 0:
+            return bicia
+
+        # Jeśli nie ma bić, znajdź zwykłe ruchy
+        for row in range(rows):
+            for col in range(cols):
+                piece = plansza[row, col]
+
+                # Sprawdź zwykłe ruchy dla pionków gracza
+                if piece == 1:  # Zwykły pion gracza
+                    ruchy = self._ruchy_piona(plansza, row, col)
                     legalne_ruchy.extend(ruchy)
                 elif piece == 3:  # Król gracza
                     ruchy = self._ruchy_krola(plansza, row, col)
                     legalne_ruchy.extend(ruchy)
-        
+
         return legalne_ruchy
 
-    def _ruchy_zwyklego_piona(self, plansza, row, col):
+    def _bicia_piona(self, plansza, row, col):
+        """Znajduje możliwe bicia dla zwykłego piona (bicie do przodu i do tyłu)."""
+        bicia = []
+        rows, cols = plansza.shape
+
+        # Konwertuj pozycję z reprezentacji 4x8 na prawdziwą kolumnę 8x8
+        real_col = col * 2 + (1 if row % 2 == 0 else 0)
+
+        # Pion może bić zarówno do przodu jak i do tyłu
+        # Sprawdź wszystkie 4 kierunki przekątne na prawdziwej szachownicy
+        # Kierunki: (zmiana_wiersza, zmiana_kolumny_8x8)
+        kierunki_8x8 = [
+            (-1, -1),  # Góra-lewo
+            (-1, 1),   # Góra-prawo
+            (1, -1),   # Dół-lewo
+            (1, 1)     # Dół-prawo
+        ]
+
+        for dr, dc_real in kierunki_8x8:
+            # Oblicz pozycję sąsiada na prawdziwej szachownicy
+            adj_row = row + dr
+            adj_col_real = real_col + dc_real
+
+            # Konwertuj z powrotem na reprezentację 4x8
+            if adj_row % 2 == 0:  # Parzyste wiersze: ciemne na 1,3,5,7
+                if adj_col_real % 2 == 1 and 0 <= adj_col_real < 8:
+                    adj_col = adj_col_real // 2
+                else:
+                    continue  # To pole nie jest ciemne
+            else:  # Nieparzyste wiersze: ciemne na 0,2,4,6
+                if adj_col_real % 2 == 0 and 0 <= adj_col_real < 8:
+                    adj_col = adj_col_real // 2
+                else:
+                    continue
+
+            # Sprawdź czy sąsiadujące pole jest w granicach i zawiera pionek przeciwnika
+            if self._czy_pole_w_granicach(adj_row, adj_col, rows, cols):
+                adj_piece = plansza[adj_row, adj_col]
+
+                # Przeciwnik to pion (2) lub król (4)
+                if adj_piece in [2, 4]:
+                    # Oblicz pole docelowe (dwa pola dalej w tym samym kierunku)
+                    target_row = adj_row + dr
+                    target_col_real = adj_col_real + dc_real
+
+                    # Konwertuj na reprezentację 4x8
+                    if target_row % 2 == 0:  # Parzyste wiersze
+                        if target_col_real % 2 == 1 and 0 <= target_col_real < 8:
+                            target_col = target_col_real // 2
+                        else:
+                            continue
+                    else:  # Nieparzyste wiersze
+                        if target_col_real % 2 == 0 and 0 <= target_col_real < 8:
+                            target_col = target_col_real // 2
+                        else:
+                            continue
+
+                    # Sprawdź czy pole docelowe jest w granicach i puste
+                    if self._czy_pole_w_granicach(target_row, target_col, rows, cols):
+                        if plansza[target_row, target_col] == 0:
+                            bicia.append(((row, col), (target_row, target_col)))
+
+        return bicia
+
+    def _ruchy_piona(self, plansza, row, col):
         """Znajduje ruchy dla zwykłego piona (ruch tylko do przodu)."""
         ruchy = []
         rows, cols = plansza.shape
@@ -100,6 +184,69 @@ class GRA:
                     ruchy.append(((row, col), (new_row, new_col)))
 
         return ruchy
+
+    def _bicia_krola(self, plansza, row, col):
+        """Znajduje możliwe bicia dla króla (bicie we wszystkich kierunkach)."""
+        bicia = []
+        rows, cols = plansza.shape
+
+        # Konwertuj pozycję z reprezentacji 4x8 na prawdziwą kolumnę 8x8
+        real_col = col * 2 + (1 if row % 2 == 0 else 0)
+
+        # Król może bić we wszystkich 4 kierunkach przekątnych
+        # Kierunki: (zmiana_wiersza, zmiana_kolumny_8x8)
+        kierunki_8x8 = [
+            (-1, -1),  # Góra-lewo
+            (-1, 1),   # Góra-prawo
+            (1, -1),   # Dół-lewo
+            (1, 1)     # Dół-prawo
+        ]
+
+        for dr, dc_real in kierunki_8x8:
+            # Oblicz pozycję sąsiada na prawdziwej szachownicy
+            adj_row = row + dr
+            adj_col_real = real_col + dc_real
+
+            # Konwertuj z powrotem na reprezentację 4x8
+            if adj_row % 2 == 0:  # Parzyste wiersze: ciemne na 1,3,5,7
+                if adj_col_real % 2 == 1 and 0 <= adj_col_real < 8:
+                    adj_col = adj_col_real // 2
+                else:
+                    continue  # To pole nie jest ciemne
+            else:  # Nieparzyste wiersze: ciemne na 0,2,4,6
+                if adj_col_real % 2 == 0 and 0 <= adj_col_real < 8:
+                    adj_col = adj_col_real // 2
+                else:
+                    continue
+
+            # Sprawdź czy sąsiadujące pole jest w granicach i zawiera pionek przeciwnika
+            if self._czy_pole_w_granicach(adj_row, adj_col, rows, cols):
+                adj_piece = plansza[adj_row, adj_col]
+
+                # Przeciwnik to pion (2) lub król (4)
+                if adj_piece in [2, 4]:
+                    # Oblicz pole docelowe (dwa pola dalej w tym samym kierunku)
+                    target_row = adj_row + dr
+                    target_col_real = adj_col_real + dc_real
+
+                    # Konwertuj na reprezentację 4x8
+                    if target_row % 2 == 0:  # Parzyste wiersze
+                        if target_col_real % 2 == 1 and 0 <= target_col_real < 8:
+                            target_col = target_col_real // 2
+                        else:
+                            continue
+                    else:  # Nieparzyste wiersze
+                        if target_col_real % 2 == 0 and 0 <= target_col_real < 8:
+                            target_col = target_col_real // 2
+                        else:
+                            continue
+
+                    # Sprawdź czy pole docelowe jest w granicach i puste
+                    if self._czy_pole_w_granicach(target_row, target_col, rows, cols):
+                        if plansza[target_row, target_col] == 0:
+                            bicia.append(((row, col), (target_row, target_col)))
+
+        return bicia
 
     def _ruchy_krola(self, plansza, row, col):
         """Znajduje ruchy dla króla (ruch do przodu i do tyłu)."""
@@ -160,6 +307,23 @@ class GRA:
         # Pobierz pionek
         pionek = self.plansza[start_row, start_col]
 
+        # Sprawdź czy to był ruch bicia
+        # Bicie ma miejsce gdy ruch przemieszcza się o 2 wiersze
+        row_diff = abs(end_row - start_row)
+
+        if row_diff == 2:  # To jest bicie
+            # Najprostszy sposób: przeszukaj wiersz pomiędzy startem a końcem
+            # i znajdź pionka przeciwnika (2 lub 4)
+            captured_row = (start_row + end_row) // 2
+
+            # Przeszukaj wszystkie 4 kolumny w wierszu captured_row
+            for captured_col in range(4):
+                piece = self.plansza[captured_row, captured_col]
+                if piece in [2, 4]:  # Pionek przeciwnika
+                    # Usuń zbity pionek
+                    self.plansza[captured_row, captured_col] = 0
+                    break
+
         # Przenieś pionek na nowe pole
         self.plansza[end_row, end_col] = pionek
 
@@ -170,9 +334,7 @@ class GRA:
         if end_row == 0 and pionek == 1:
             self.plansza[end_row, end_col] = 3  # Promuj do króla
 
-        # TODO: Obsługa bicia (usuwanie zbitych pionków)
-
-    def start(self, show=False, notebook=False):
+    def start(self, show=False, notebook=False, time = 1.0):
         """
         Rozpoczyna grę między dwoma botami.
         Gra toczy się w pętli, aż jeden z botów nie ma legalnych ruchów.
@@ -192,7 +354,7 @@ class GRA:
                 from IPython.display import clear_output, display, HTML
                 display(HTML("<style>pre, code {font-family: 'Courier New', monospace !important;}</style>"))
             self.wyswietl_plansze(self.plansza, pokaz_legende=True)
-            time.sleep(2)
+            time.sleep(time*2)
             pierwsza_runda = False
 
         while True:
@@ -275,8 +437,8 @@ class GRA:
                 if pierwsza_runda:
                     pierwsza_runda = False
 
-                # Czekaj 1 sekundę
-                time.sleep(1)
+                # Czekaj
+                time.sleep(time)
 
     def wyswietl_plansze(self, plansza=None, pokaz_legende=True, notebook=False):
         """Wyświetla pełną planszę 8x8 z białymi polami i ładnymi symbolami."""
