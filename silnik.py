@@ -334,7 +334,7 @@ class GRA:
         if end_row == 0 and pionek == 1:
             self.plansza[end_row, end_col] = 3  # Promuj do króla
 
-    def start(self, show=False, notebook=False, time = 1.0):
+    def start(self, show=False, notebook=False, show_time = 1.0):
         """
         Rozpoczyna grę między dwoma botami.
         Gra toczy się w pętli, aż jeden z botów nie ma legalnych ruchów.
@@ -354,7 +354,7 @@ class GRA:
                 from IPython.display import clear_output, display, HTML
                 display(HTML("<style>pre, code {font-family: 'Courier New', monospace !important;}</style>"))
             self.wyswietl_plansze(self.plansza, pokaz_legende=True)
-            time.sleep(time*2)
+            time.sleep(show_time*2)
             pierwsza_runda = False
 
         while True:
@@ -438,7 +438,7 @@ class GRA:
                     pierwsza_runda = False
 
                 # Czekaj
-                time.sleep(time)
+                time.sleep(show_time)
 
     def wyswietl_plansze(self, plansza=None, pokaz_legende=True, notebook=False):
         """Wyświetla pełną planszę 8x8 z białymi polami i ładnymi symbolami."""
