@@ -63,6 +63,10 @@ class GRA:
         self.bot1_time_flags = time_flags
         self.bot2_time_flags = time_flags
 
+        # Śledzenie pozycji i ruchów dla remisu
+        self.pozycje_planszy = {}  # hash -> liczba wystąpień
+        self.ruchy_bez_bicia_promocji = 0  # licznik ruchów bez bicia/promocji
+
     def _zaladuj_bota(self, nazwa_bota):
         """Ładuje klasę bota z pliku w folderze boty."""
         sciezka_bota = os.path.join(os.path.dirname(__file__), 'boty', f'{nazwa_bota}.py')
@@ -223,7 +227,48 @@ class GRA:
 
         return ruchy
 
-    def update(self, ruch):
+    def update(self, plansza, ruch):
+        """
+        Zwraca nową planszę po wykonaniu ruchu (nie modyfikuje wejściowej planszy).
+
+        Args:
+            plansza: numpy array 8x8 - plansza wejściowa
+            ruch: ((start_row, start_col), (end_row, end_col))
+
+        Returns:
+            (nowa_plansza: numpy array, bylo_bicie: bool, pozycja_koncowa: tuple)
+        """
+        # Stwórz kopię planszy
+        nowa_plansza = plansza.copy()
+
+        start, end = ruch
+        start_row, start_col = start
+        end_row, end_col = end
+
+        # Pobierz pionek
+        piece = nowa_plansza[start_row, start_col]
+
+        # Sprawdź czy to bicie
+        row_diff = abs(end_row - start_row)
+        bylo_bicie = (row_diff == 2)
+
+        if bylo_bicie:
+            # Usuń pionek przeciwnika (w środku między startem a końcem)
+            captured_row = (start_row + end_row) // 2
+            captured_col = (start_col + end_col) // 2
+            nowa_plansza[captured_row, captured_col] = 0
+
+        # Przenieś pionek
+        nowa_plansza[end_row, end_col] = piece
+        nowa_plansza[start_row, start_col] = 0
+
+        # Sprawdź promocję do króla
+        if end_row == 0 and piece == 1:
+            nowa_plansza[end_row, end_col] = 3
+
+        return nowa_plansza, bylo_bicie, (end_row, end_col)
+
+    def _update(self, ruch):
         """
         Aktualizuje planszę na podstawie ruchu.
 
@@ -231,7 +276,7 @@ class GRA:
             ruch: ((start_row, start_col), (end_row, end_col))
 
         Returns:
-            (bylo_bicie: bool, pozycja_koncowa: tuple)
+            (bylo_bicie: bool, byla_promocja: bool, pozycja_koncowa: tuple)
         """
         start, end = ruch
         start_row, start_col = start
@@ -255,10 +300,12 @@ class GRA:
         self.plansza[start_row, start_col] = 0
 
         # Sprawdź promocję do króla
+        byla_promocja = False
         if end_row == 0 and piece == 1:
             self.plansza[end_row, end_col] = 3
+            byla_promocja = True
 
-        return bylo_bicie, (end_row, end_col)
+        return bylo_bicie, byla_promocja, (end_row, end_col)
 
     def zamien_perspektywe(self, plansza):
         """
@@ -286,6 +333,18 @@ class GRA:
 
         return zamieniona
 
+    def _hash_planszy(self, plansza):
+        """
+        Zwraca hash planszy do wykrywania powtórzeń.
+        Konwertuje numpy array na krotkę i liczy hash.
+        """
+        # Konwertuj None na -1 dla spójności hashowania
+        plansza_do_hasha = tuple(
+            tuple(-1 if cell is None else cell for cell in row)
+            for row in plansza
+        )
+        return hash(plansza_do_hasha)
+
     def start(self, show=False, notebook=False, show_time=1.0):
         """Rozpoczyna grę między dwoma botami."""
         runda = 0
@@ -299,6 +358,12 @@ class GRA:
             self.debug_file.write(f"Bot1 time_flags: {self.bot1_time_flags}\n")
             self.debug_file.write(f"Bot2 time_flags: {self.bot2_time_flags}\n")
             self.debug_file.write("="*70 + "\n")
+
+        # Zahashuj początkową pozycję planszy
+        hash_poczatkowy = self._hash_planszy(self.plansza)
+        self.pozycje_planszy[hash_poczatkowy] = 1
+        if self.debug:
+            self.debug_file.write(f">>> Hash początkowej planszy: {hash_poczatkowy}\n")
 
         # Wyświetl początkową planszę
         if show:
@@ -436,7 +501,7 @@ class GRA:
                         self.debug_file.write(f"Wybrany ruch: {wybrany_ruch}\n")
 
                 # Wykonaj ruch
-                bylo_bicie, pozycja_koncowa = self.update(wybrany_ruch)
+                bylo_bicie, byla_promocja, pozycja_koncowa = self._update(wybrany_ruch)
 
                 # Sprawdź czy można kontynuować wielobicie
                 if bylo_bicie:
@@ -452,11 +517,94 @@ class GRA:
                 # Koniec tury
                 break
 
+            # Aktualizuj licznik ruchów bez bicia/promocji
+            if bylo_bicie or byla_promocja:
+                self.ruchy_bez_bicia_promocji = 0
+                if self.debug:
+                    self.debug_file.write(f">>> Reset licznika (bicie={bylo_bicie}, promocja={byla_promocja})\n")
+            else:
+                self.ruchy_bez_bicia_promocji += 1
+                if self.debug:
+                    self.debug_file.write(f">>> Licznik ruchów bez bicia/promocji: {self.ruchy_bez_bicia_promocji}\n")
+
+            # Sprawdź remis przez 20 ruchów bez bicia/promocji
+            if self.ruchy_bez_bicia_promocji >= 20:
+                if show:
+                    if notebook:
+                        clear_output(wait=True)
+                    else:
+                        print("\033[21A", end="")
+
+                    if runda % 2 == 1:
+                        plansza_do_wyswietlenia = self.zamien_perspektywe(self.plansza)
+                    else:
+                        plansza_do_wyswietlenia = self.plansza
+
+                    if notebook:
+                        print(f"Runda: {runda} - REMIS!")
+                        display(HTML("<style>pre, code {font-family: 'Courier New', monospace !important;}</style>"))
+                        self.wyswietl_plansze(plansza_do_wyswietlenia, pokaz_legende=False, notebook=True)
+                        print(f"\n🤝 Remis! 20 ruchów bez bicia lub promocji 🤝\n")
+                    else:
+                        print(f"\033[KRunda: {runda} - REMIS!")
+                        self.wyswietl_plansze(plansza_do_wyswietlenia, pokaz_legende=False, notebook=notebook)
+                        print(f"\033[K\n🤝 Remis! 20 ruchów bez bicia lub promocji 🤝\n")
+
+                if self.debug and self.debug_file:
+                    self.debug_file.write(f"\n\n{'='*70}\n")
+                    self.debug_file.write(f"REMIS - 20 ruchów bez bicia lub promocji\n")
+                    self.debug_file.write(f"{'='*70}\n")
+                    self.debug_file.close()
+                    print(f"\n[DEBUG] Zapisano historię gry do pliku: debug_gra.txt\n")
+
+                return 0  # Remis
+
             # Zamień perspektywę
             if self.debug:
                 self.debug_file.write(f"\n{'='*70}\n>>> Zamiana perspektywy\n{'='*70}\n")
             self.plansza = self.zamien_perspektywe(self.plansza)
             runda += 1
+
+            # Sprawdź remis przez 3-krotne powtórzenie pozycji
+            hash_planszy = self._hash_planszy(self.plansza)
+            if hash_planszy in self.pozycje_planszy:
+                self.pozycje_planszy[hash_planszy] += 1
+            else:
+                self.pozycje_planszy[hash_planszy] = 1
+
+            if self.debug:
+                self.debug_file.write(f">>> Hash planszy: {hash_planszy}, wystąpienia: {self.pozycje_planszy[hash_planszy]}\n")
+
+            if self.pozycje_planszy[hash_planszy] >= 3:
+                if show:
+                    if notebook:
+                        clear_output(wait=True)
+                    else:
+                        print("\033[21A", end="")
+
+                    if runda % 2 == 1:
+                        plansza_do_wyswietlenia = self.zamien_perspektywe(self.plansza)
+                    else:
+                        plansza_do_wyswietlenia = self.plansza
+
+                    if notebook:
+                        print(f"Runda: {runda} - REMIS!")
+                        display(HTML("<style>pre, code {font-family: 'Courier New', monospace !important;}</style>"))
+                        self.wyswietl_plansze(plansza_do_wyswietlenia, pokaz_legende=False, notebook=True)
+                        print(f"\n🤝 Remis! 3-krotne powtórzenie pozycji 🤝\n")
+                    else:
+                        print(f"\033[KRunda: {runda} - REMIS!")
+                        self.wyswietl_plansze(plansza_do_wyswietlenia, pokaz_legende=False, notebook=notebook)
+                        print(f"\033[K\n🤝 Remis! 3-krotne powtórzenie pozycji 🤝\n")
+
+                if self.debug and self.debug_file:
+                    self.debug_file.write(f"\n\n{'='*70}\n")
+                    self.debug_file.write(f"REMIS - 3-krotne powtórzenie pozycji\n")
+                    self.debug_file.write(f"{'='*70}\n")
+                    self.debug_file.close()
+                    print(f"\n[DEBUG] Zapisano historię gry do pliku: debug_gra.txt\n")
+
+                return 0  # Remis
 
             # Wyświetl planszę
             if show:

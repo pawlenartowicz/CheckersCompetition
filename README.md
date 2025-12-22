@@ -186,8 +186,7 @@ gra = GRA("bot1", "bot2", debug=True, time_flags=99)
 
 ## Terminarz
 - 4.11 GITHUB + Google Colab + Random-Bot (1 dzień opóźnienia)
-- 11.11 Bicia i ruchy królem, dziedziczenie klasy (możliwość korzystania z funkcji z głównej klasy)
-- 25.11 Więcej botów
-- 16.12 Testy
+- 22.12 pełna mechanika
+- 26.12 
 - 20.01 Turniej
 Powstanie po wykładzie we wtorek, 28.10

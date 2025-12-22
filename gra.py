@@ -21,6 +21,11 @@ class bot():
         '''
         wybrany_ruch = ruchy[0] # dowolny algorytm
 
+        te_same_ruchy = GRA.znajdz_legalne_ruchy(plansza) # sprawdzenie legalnych ruchów
+        nowa_plansza = GRA.update(plansza, wybrany_ruch) # wykonanie ruchu na planszy
+        odwrocona_plansza = GRA.odwroc_plansze(nowa_plansza) # odwrócenie planszy dla przeciwnika
+
+
         return wybrany_ruch
 
 twoj_bot = bot()
