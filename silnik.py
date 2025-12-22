@@ -359,12 +359,6 @@ class GRA:
             self.debug_file.write(f"Bot2 time_flags: {self.bot2_time_flags}\n")
             self.debug_file.write("="*70 + "\n")
 
-        # Zahashuj początkową pozycję planszy
-        hash_poczatkowy = self._hash_planszy(self.plansza)
-        self.pozycje_planszy[hash_poczatkowy] = 1
-        if self.debug:
-            self.debug_file.write(f">>> Hash początkowej planszy: {hash_poczatkowy}\n")
-
         # Wyświetl początkową planszę
         if show:
             if not notebook:
@@ -571,9 +565,6 @@ class GRA:
                 self.pozycje_planszy[hash_planszy] += 1
             else:
                 self.pozycje_planszy[hash_planszy] = 1
-
-            if self.debug:
-                self.debug_file.write(f">>> Hash planszy: {hash_planszy}, wystąpienia: {self.pozycje_planszy[hash_planszy]}\n")
 
             if self.pozycje_planszy[hash_planszy] >= 3:
                 if show:
