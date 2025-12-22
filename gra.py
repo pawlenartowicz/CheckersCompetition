@@ -34,6 +34,6 @@ bot2 = "random_bot"
 
 # Test
 if __name__ == "__main__":
-
-    gra = GRA(bot1, bot2)
-    gra.start(show=True)
+    # debug=True zapisuje każdą planszę do pliku debug_gra.txt
+    gra = GRA(bot1, bot2, debug=True)
+    gra.start(show=True, show_time=0.5)

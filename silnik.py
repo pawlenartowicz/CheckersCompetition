@@ -2,22 +2,54 @@ import numpy as np
 import importlib.util
 import os
 import time
-
+import threading
+import random
+from benchmark_czasowy import time_benchmark
 
 class GRA:
-    def __init__(self, bot1, bot2):
-        self.plansza = np.array([
-            [2, 2, 2, 2],
-            [2, 2, 2, 2],
-            [2, 2, 2, 2],
-            [0, 0, 0, 0],
-            [0, 0, 0, 0],
-            [1, 1, 1, 1],
-            [1, 1, 1, 1],
-            [1, 1, 1, 1]
-        ])
+    def __init__(self, bot1, bot2, debug=False, time_flags=3):
+        """
+        Inicjalizacja gry w warcaby.
 
-        # Ładowanie botów
+        Plansza 8x8 gdzie:
+        - None = białe pole (niedostępne)
+        - 0 = puste ciemne pole
+        - 1 = pion gracza
+        - 2 = pion przeciwnika
+        - 3 = król gracza
+        - 4 = król przeciwnika
+
+        Args:
+            bot1: pierwszy bot (instance lub string)
+            bot2: drugi bot (instance lub string)
+            debug: jeśli True, zapisuje każdą planszę do pliku debug_gra.txt
+        """
+        self.debug = debug
+        self.debug_file = None
+        self.move_number = 0
+
+        if self.debug:
+            self.debug_file = open("debug_gra.txt", "w", encoding="utf-8")
+            self.debug_file.write("="*70 + "\n")
+            self.debug_file.write("DEBUG GRY W WARCABY\n")
+            self.debug_file.write("="*70 + "\n\n")
+
+        # Inicjalizacja planszy 8x8
+        self.plansza = np.full((8, 8), None, dtype=object)
+
+        # Wypełnij ciemne pola
+        for row in range(8):
+            for col in range(8):
+                # Ciemne pola: (row + col) % 2 == 1
+                if (row + col) % 2 == 1:
+                    if row < 3:
+                        self.plansza[row, col] = 2  # Przeciwnik
+                    elif row > 4:
+                        self.plansza[row, col] = 1  # Gracz
+                    else:
+                        self.plansza[row, col] = 0  # Puste
+
+        # Załaduj botów
         if type(bot1) == str:
             self.bot1 = self._zaladuj_bota(bot1)
         else:
@@ -28,324 +60,247 @@ class GRA:
         else:
             self.bot2 = bot2
 
+        self.bot1_time_flags = time_flags
+        self.bot2_time_flags = time_flags
+
     def _zaladuj_bota(self, nazwa_bota):
-        """
-        Ładuje klasę bota z pliku w folderze boty.
-
-        Args:
-            nazwa_bota: nazwa pliku bota (bez .py)
-
-        Returns:
-            instancja klasy bot
-        """
-        # Ścieżka do pliku bota
+        """Ładuje klasę bota z pliku w folderze boty."""
         sciezka_bota = os.path.join(os.path.dirname(__file__), 'boty', f'{nazwa_bota}.py')
-
-        # Dynamiczne załadowanie modułu
         spec = importlib.util.spec_from_file_location(nazwa_bota, sciezka_bota)
         modul = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(modul)
-
-        # Utworzenie instancji klasy bot
         return modul.bot()
 
-    def znajdz_legalne_ruchy(self, plansza):
+    def _wywolaj_bota_z_timeoutem(self, bot, plansza, ruchy, timeout, bot_number):
         """
-        Znajduje legalne ruchy dla gracza.
-        Najpierw sprawdza bicia - jeśli są dostępne, zwraca tylko bicia.
-        Jeśli nie ma bić, zwraca zwykłe ruchy.
+        Wywołuje bota z timeoutem.
 
         Args:
-            plansza: numpy array 4x8 reprezentujący ciemne pola
+            bot: instancja bota
+            plansza: aktualna plansza
+            ruchy: legalne ruchy
+            timeout: maksymalny czas w sekundach
+            bot_number: numer bota (1 lub 2)
+
+        Returns:
+            (wybrany_ruch, czas_wykonania, przekroczono_limit)
+        """
+        result = [None]
+
+        def bot_wrapper():
+            try:
+                result[0] = bot.move(plansza, ruchy)
+            except Exception as e:
+                if self.debug:
+                    self.debug_file.write(f"\n!!! BŁĄD w bocie: {e}\n")
+                result[0] = None
+
+        start_time = time.time()
+        thread = threading.Thread(target=bot_wrapper)
+        thread.daemon = True
+        thread.start()
+        thread.join(timeout=timeout)
+        elapsed_time = time.time() - start_time
+
+        if thread.is_alive():
+            # Bot nie skończył w czasie - zwróć losowy ruch
+            if self.debug:
+                self.debug_file.write(f"\n!!! TIMEOUT! Bot{bot_number} przekroczył limit {timeout:.6f}s\n")
+            return random.choice(ruchy), elapsed_time, True
+
+        # Bot skończył w czasie
+        if result[0] is None or result[0] not in ruchy:
+            # Bot zwrócił niepoprawny ruch
+            if self.debug:
+                self.debug_file.write(f"\n!!! NIEPOPRAWNY RUCH od Bot{bot_number}: {result[0]}\n")
+            return random.choice(ruchy), elapsed_time, False
+
+        return result[0], elapsed_time, False
+
+    def _jest_ciemne_pole(self, row, col):
+        """Sprawdza czy pole jest ciemne (dostępne do gry)."""
+        return (row + col) % 2 == 1
+
+    def znajdz_legalne_ruchy(self, plansza, tylko_dla_pozycji=None):
+        """
+        Znajduje legalne ruchy dla gracza.
+
+        Args:
+            plansza: numpy array 8x8
+            tylko_dla_pozycji: tuple (row, col) - jeśli podane, zwraca ruchy tylko dla tego pionka
 
         Returns:
             lista krotek ((start_row, start_col), (end_row, end_col))
         """
         bicia = []
-        legalne_ruchy = []
-        rows, cols = plansza.shape
+        ruchy = []
 
-        # Najpierw sprawdź czy są dostępne bicia
-        for row in range(rows):
-            for col in range(cols):
-                piece = plansza[row, col]
+        # Określ które pozycje sprawdzać
+        if tylko_dla_pozycji is not None:
+            pozycje = [tylko_dla_pozycji]
+        else:
+            pozycje = [(r, c) for r in range(8) for c in range(8)]
 
-                # Sprawdź bicia dla pionków gracza
-                if piece == 1:  # Zwykły pion gracza
-                    bicia_piona = self._bicia_piona(plansza, row, col)
-                    bicia.extend(bicia_piona)
-                elif piece == 3:  # Król gracza
-                    bicia_krola = self._bicia_krola(plansza, row, col)
-                    bicia.extend(bicia_krola)
+        # Znajdź wszystkie bicia
+        for row, col in pozycje:
+            piece = plansza[row, col]
+            if piece in [1, 3]:  # Pionki gracza
+                bicia.extend(self._znajdz_bicia(plansza, row, col, piece))
 
-        # Jeśli są bicia, zwróć tylko bicia (bicie jest obowiązkowe)
-        if len(bicia) > 0:
+        # Jeśli są bicia, zwróć tylko bicia (obowiązkowe)
+        if bicia:
             return bicia
 
         # Jeśli nie ma bić, znajdź zwykłe ruchy
-        for row in range(rows):
-            for col in range(cols):
-                piece = plansza[row, col]
-
-                # Sprawdź zwykłe ruchy dla pionków gracza
-                if piece == 1:  # Zwykły pion gracza
-                    ruchy = self._ruchy_piona(plansza, row, col)
-                    legalne_ruchy.extend(ruchy)
-                elif piece == 3:  # Król gracza
-                    ruchy = self._ruchy_krola(plansza, row, col)
-                    legalne_ruchy.extend(ruchy)
-
-        return legalne_ruchy
-
-    def _bicia_piona(self, plansza, row, col):
-        """Znajduje możliwe bicia dla zwykłego piona (bicie do przodu i do tyłu)."""
-        bicia = []
-        rows, cols = plansza.shape
-
-        # Konwertuj pozycję z reprezentacji 4x8 na prawdziwą kolumnę 8x8
-        real_col = col * 2 + (1 if row % 2 == 0 else 0)
-
-        # Pion może bić zarówno do przodu jak i do tyłu
-        # Sprawdź wszystkie 4 kierunki przekątne na prawdziwej szachownicy
-        # Kierunki: (zmiana_wiersza, zmiana_kolumny_8x8)
-        kierunki_8x8 = [
-            (-1, -1),  # Góra-lewo
-            (-1, 1),   # Góra-prawo
-            (1, -1),   # Dół-lewo
-            (1, 1)     # Dół-prawo
-        ]
-
-        for dr, dc_real in kierunki_8x8:
-            # Oblicz pozycję sąsiada na prawdziwej szachownicy
-            adj_row = row + dr
-            adj_col_real = real_col + dc_real
-
-            # Konwertuj z powrotem na reprezentację 4x8
-            if adj_row % 2 == 0:  # Parzyste wiersze: ciemne na 1,3,5,7
-                if adj_col_real % 2 == 1 and 0 <= adj_col_real < 8:
-                    adj_col = adj_col_real // 2
-                else:
-                    continue  # To pole nie jest ciemne
-            else:  # Nieparzyste wiersze: ciemne na 0,2,4,6
-                if adj_col_real % 2 == 0 and 0 <= adj_col_real < 8:
-                    adj_col = adj_col_real // 2
-                else:
-                    continue
-
-            # Sprawdź czy sąsiadujące pole jest w granicach i zawiera pionek przeciwnika
-            if self._czy_pole_w_granicach(adj_row, adj_col, rows, cols):
-                adj_piece = plansza[adj_row, adj_col]
-
-                # Przeciwnik to pion (2) lub król (4)
-                if adj_piece in [2, 4]:
-                    # Oblicz pole docelowe (dwa pola dalej w tym samym kierunku)
-                    target_row = adj_row + dr
-                    target_col_real = adj_col_real + dc_real
-
-                    # Konwertuj na reprezentację 4x8
-                    if target_row % 2 == 0:  # Parzyste wiersze
-                        if target_col_real % 2 == 1 and 0 <= target_col_real < 8:
-                            target_col = target_col_real // 2
-                        else:
-                            continue
-                    else:  # Nieparzyste wiersze
-                        if target_col_real % 2 == 0 and 0 <= target_col_real < 8:
-                            target_col = target_col_real // 2
-                        else:
-                            continue
-
-                    # Sprawdź czy pole docelowe jest w granicach i puste
-                    if self._czy_pole_w_granicach(target_row, target_col, rows, cols):
-                        if plansza[target_row, target_col] == 0:
-                            bicia.append(((row, col), (target_row, target_col)))
-
-        return bicia
-
-    def _ruchy_piona(self, plansza, row, col):
-        """Znajduje ruchy dla zwykłego piona (ruch tylko do przodu)."""
-        ruchy = []
-        rows, cols = plansza.shape
-
-        # Pion gracza porusza się w górę (w kierunku row-1)
-        # Na planszy szachownicy parzysty/nieparzysty wiersz ma inne sąsiedztwo
-
-        if row % 2 == 0:  # Parzyste wiersze: ciemne pola na 1,3,5,7
-            # Sąsiedzi w górę to col_idx i col_idx+1 w wierszu row-1
-            kierunki = [(-1, 0), (-1, 1)]
-        else:  # Nieparzyste wiersze: ciemne pola na 0,2,4,6
-            # Sąsiedzi w górę to col_idx-1 i col_idx w wierszu row-1
-            kierunki = [(-1, -1), (-1, 0)]
-
-        for dr, dc in kierunki:
-            new_row, new_col = row + dr, col + dc
-
-            if self._czy_pole_w_granicach(new_row, new_col, rows, cols):
-                if plansza[new_row, new_col] == 0:  # Pole puste
-                    ruchy.append(((row, col), (new_row, new_col)))
+        for row, col in pozycje:
+            piece = plansza[row, col]
+            if piece in [1, 3]:  # Pionki gracza
+                ruchy.extend(self._znajdz_ruchy(plansza, row, col, piece))
 
         return ruchy
 
-    def _bicia_krola(self, plansza, row, col):
-        """Znajduje możliwe bicia dla króla (bicie we wszystkich kierunkach)."""
+    def _znajdz_bicia(self, plansza, row, col, piece):
+        """
+        Znajduje bicia dla pionka.
+        Bicia: przeskok o ±2, ±2 jeśli na ±1, ±1 jest przeciwnik.
+        """
         bicia = []
-        rows, cols = plansza.shape
 
-        # Konwertuj pozycję z reprezentacji 4x8 na prawdziwą kolumnę 8x8
-        real_col = col * 2 + (1 if row % 2 == 0 else 0)
+        kierunki = [(-1, -1), (-1, 1), (1, -1), (1, 1)]
 
-        # Król może bić we wszystkich 4 kierunkach przekątnych
-        # Kierunki: (zmiana_wiersza, zmiana_kolumny_8x8)
-        kierunki_8x8 = [
-            (-1, -1),  # Góra-lewo
-            (-1, 1),   # Góra-prawo
-            (1, -1),   # Dół-lewo
-            (1, 1)     # Dół-prawo
-        ]
+        for dr, dc in kierunki:
+            # Pozycja przeciwnika (sąsiednie pole)
+            opp_row, opp_col = row + dr, col + dc
 
-        for dr, dc_real in kierunki_8x8:
-            # Oblicz pozycję sąsiada na prawdziwej szachownicy
-            adj_row = row + dr
-            adj_col_real = real_col + dc_real
+            # Pozycja docelowa (pole za przeciwnikiem)
+            target_row, target_col = row + 2*dr, col + 2*dc
 
-            # Konwertuj z powrotem na reprezentację 4x8
-            if adj_row % 2 == 0:  # Parzyste wiersze: ciemne na 1,3,5,7
-                if adj_col_real % 2 == 1 and 0 <= adj_col_real < 8:
-                    adj_col = adj_col_real // 2
-                else:
-                    continue  # To pole nie jest ciemne
-            else:  # Nieparzyste wiersze: ciemne na 0,2,4,6
-                if adj_col_real % 2 == 0 and 0 <= adj_col_real < 8:
-                    adj_col = adj_col_real // 2
-                else:
-                    continue
+            # Sprawdź czy pozycje są w granicach
+            if not (0 <= opp_row < 8 and 0 <= opp_col < 8):
+                continue
+            if not (0 <= target_row < 8 and 0 <= target_col < 8):
+                continue
 
-            # Sprawdź czy sąsiadujące pole jest w granicach i zawiera pionek przeciwnika
-            if self._czy_pole_w_granicach(adj_row, adj_col, rows, cols):
-                adj_piece = plansza[adj_row, adj_col]
+            # Sprawdź czy na sąsiednim polu jest przeciwnik
+            opp_piece = plansza[opp_row, opp_col]
+            if opp_piece not in [2, 4]:  # Musi być pionek przeciwnika
+                continue
 
-                # Przeciwnik to pion (2) lub król (4)
-                if adj_piece in [2, 4]:
-                    # Oblicz pole docelowe (dwa pola dalej w tym samym kierunku)
-                    target_row = adj_row + dr
-                    target_col_real = adj_col_real + dc_real
+            # Sprawdź czy pole docelowe jest puste
+            if plansza[target_row, target_col] != 0:
+                continue
 
-                    # Konwertuj na reprezentację 4x8
-                    if target_row % 2 == 0:  # Parzyste wiersze
-                        if target_col_real % 2 == 1 and 0 <= target_col_real < 8:
-                            target_col = target_col_real // 2
-                        else:
-                            continue
-                    else:  # Nieparzyste wiersze
-                        if target_col_real % 2 == 0 and 0 <= target_col_real < 8:
-                            target_col = target_col_real // 2
-                        else:
-                            continue
-
-                    # Sprawdź czy pole docelowe jest w granicach i puste
-                    if self._czy_pole_w_granicach(target_row, target_col, rows, cols):
-                        if plansza[target_row, target_col] == 0:
-                            bicia.append(((row, col), (target_row, target_col)))
+            # To jest legalne bicie
+            bicia.append(((row, col), (target_row, target_col)))
 
         return bicia
 
-    def _ruchy_krola(self, plansza, row, col):
-        """Znajduje ruchy dla króla (ruch do przodu i do tyłu)."""
+    def _znajdz_ruchy(self, plansza, row, col, piece):
+        """
+        Znajduje zwykłe ruchy dla pionka.
+        Ruchy: przesunięcie o ±1, ±1 na puste pole.
+        """
         ruchy = []
-        rows, cols = plansza.shape
 
-        # Król może się poruszać we wszystkich kierunkach po przekątnej
-        if row % 2 == 0:  # Parzyste wiersze: ciemne pola na 1,3,5,7
-            # Sąsiedzi: góra (col, col+1), dół (col, col+1)
-            kierunki = [(-1, 0), (-1, 1), (1, 0), (1, 1)]
-        else:  # Nieparzyste wiersze: ciemne pola na 0,2,4,6
-            # Sąsiedzi: góra (col-1, col), dół (col-1, col)
-            kierunki = [(-1, -1), (-1, 0), (1, -1), (1, 0)]
+        # Określ kierunki na podstawie typu pionka
+        if piece == 1:  # Zwykły pion - tylko do przodu
+            kierunki = [(-1, -1), (-1, 1)]
+        elif piece == 3:  # Król - wszystkie kierunki
+            kierunki = [(-1, -1), (-1, 1), (1, -1), (1, 1)]
+        else:
+            return []
 
         for dr, dc in kierunki:
-            new_row, new_col = row + dr, col + dc
+            target_row, target_col = row + dr, col + dc
 
-            if self._czy_pole_w_granicach(new_row, new_col, rows, cols):
-                if plansza[new_row, new_col] == 0:  # Pole puste
-                    ruchy.append(((row, col), (new_row, new_col)))
+            # Sprawdź czy pozycja jest w granicach
+            if not (0 <= target_row < 8 and 0 <= target_col < 8):
+                continue
+
+            # Sprawdź czy pole docelowe jest puste
+            if plansza[target_row, target_col] == 0:
+                ruchy.append(((row, col), (target_row, target_col)))
 
         return ruchy
-
-    def _czy_pole_w_granicach(self, row, col, max_rows, max_cols):
-        """Sprawdza czy pole jest w granicach planszy."""
-        return 0 <= row < max_rows and 0 <= col < max_cols
-
-    def zamien_perspektywe(self, plansza):
-        """
-        Zamienia perspektywę planszy - pionki gracza stają się pionkami przeciwnika i odwrotnie.
-        Plansza jest również odwracana wertykalnie i horyzontalnie, żeby przeciwnik widział ją ze swojej strony.
-
-        Args:
-            plansza: numpy array 4x8 reprezentujący planszę
-
-        Returns:
-            numpy array z zamienioną perspektywą
-        """
-        # Mapowanie: 0->0, 1->2, 2->1, 3->4, 4->3
-        lookup = np.array([0, 2, 1, 4, 3])
-
-        # Zamiana pionków przez indeksowanie i odwrócenie planszy
-        zamieniona_plansza = lookup[plansza][::-1, ::-1]
-
-        return zamieniona_plansza
 
     def update(self, ruch):
         """
-        Aktualizuje planszę na podstawie wykonanego ruchu.
+        Aktualizuje planszę na podstawie ruchu.
 
         Args:
-            ruch: krotka ((start_row, start_col), (end_row, end_col))
+            ruch: ((start_row, start_col), (end_row, end_col))
+
+        Returns:
+            (bylo_bicie: bool, pozycja_koncowa: tuple)
         """
         start, end = ruch
         start_row, start_col = start
         end_row, end_col = end
 
         # Pobierz pionek
-        pionek = self.plansza[start_row, start_col]
+        piece = self.plansza[start_row, start_col]
 
-        # Sprawdź czy to był ruch bicia
-        # Bicie ma miejsce gdy ruch przemieszcza się o 2 wiersze
+        # Sprawdź czy to bicie
         row_diff = abs(end_row - start_row)
+        bylo_bicie = (row_diff == 2)
 
-        if row_diff == 2:  # To jest bicie
-            # Najprostszy sposób: przeszukaj wiersz pomiędzy startem a końcem
-            # i znajdź pionka przeciwnika (2 lub 4)
+        if bylo_bicie:
+            # Usuń pionek przeciwnika (w środku między startem a końcem)
             captured_row = (start_row + end_row) // 2
+            captured_col = (start_col + end_col) // 2
+            self.plansza[captured_row, captured_col] = 0
 
-            # Przeszukaj wszystkie 4 kolumny w wierszu captured_row
-            for captured_col in range(4):
-                piece = self.plansza[captured_row, captured_col]
-                if piece in [2, 4]:  # Pionek przeciwnika
-                    # Usuń zbity pionek
-                    self.plansza[captured_row, captured_col] = 0
-                    break
-
-        # Przenieś pionek na nowe pole
-        self.plansza[end_row, end_col] = pionek
-
-        # Wyczyść stare pole
+        # Przenieś pionek
+        self.plansza[end_row, end_col] = piece
         self.plansza[start_row, start_col] = 0
 
-        # Sprawdź promocję do króla (gracz osiąga wiersz 0)
-        if end_row == 0 and pionek == 1:
-            self.plansza[end_row, end_col] = 3  # Promuj do króla
+        # Sprawdź promocję do króla
+        if end_row == 0 and piece == 1:
+            self.plansza[end_row, end_col] = 3
 
-    def start(self, show=False, notebook=False, show_time = 1.0):
-        """
-        Rozpoczyna grę między dwoma botami.
-        Gra toczy się w pętli, aż jeden z botów nie ma legalnych ruchów.
+        return bylo_bicie, (end_row, end_col)
 
-        Args:
-            show: jeśli True, wyświetla planszę po każdej rundzie i czeka 2 sekundy
+    def zamien_perspektywe(self, plansza):
         """
+        Zamienia perspektywę - odwraca planszę i zamienia pionki.
+        """
+        # Mapowanie: 0->0, 1->2, 2->1, 3->4, 4->3, None->None
+        def zamien_pionek(p):
+            if p is None:
+                return None
+            elif p == 0:
+                return 0
+            elif p == 1:
+                return 2
+            elif p == 2:
+                return 1
+            elif p == 3:
+                return 4
+            elif p == 4:
+                return 3
+            return p
+
+        # Odwróć planszę i zamień pionki
+        odwrocona = np.rot90(plansza, 2)  # Obrót o 180 stopni
+        zamieniona = np.vectorize(zamien_pionek)(odwrocona)
+
+        return zamieniona
+
+    def start(self, show=False, notebook=False, show_time=1.0):
+        """Rozpoczyna grę między dwoma botami."""
         runda = 0
         pierwsza_runda = True
 
-        # Wyświetl początkową planszę przed pierwszym ruchem
+        # Wykonaj benchmark czasowy na początku gry
+        benchmark_time = time_benchmark()
+        if self.debug:
+            self.debug_file.write(f"TIME BENCHMARK: {benchmark_time:.6f} sekund na ruch\n")
+            self.debug_file.write(f"Limit czasowy: {benchmark_time:.6f}s (normalny), {2*benchmark_time:.6f}s (maksymalny)\n")
+            self.debug_file.write(f"Bot1 time_flags: {self.bot1_time_flags}\n")
+            self.debug_file.write(f"Bot2 time_flags: {self.bot2_time_flags}\n")
+            self.debug_file.write("="*70 + "\n")
+
+        # Wyświetl początkową planszę
         if show:
             if not notebook:
                 print(f"\033[KRunda: {runda}")
@@ -353,73 +308,164 @@ class GRA:
                 print(f"Runda: {runda}")
                 from IPython.display import clear_output, display, HTML
                 display(HTML("<style>pre, code {font-family: 'Courier New', monospace !important;}</style>"))
-            self.wyswietl_plansze(self.plansza, pokaz_legende=True)
-            time.sleep(show_time*2)
+            self.wyswietl_plansze(self.plansza, pokaz_legende=True, notebook=notebook)
+            time.sleep(show_time * 2)
             pierwsza_runda = False
 
         while True:
-            # Sprawdź legalne ruchy dla aktualnego gracza
-            legalne_ruchy = self.znajdz_legalne_ruchy(self.plansza)
+            # Pętla wielobicia tym samym pionkiem
+            pozycja_dla_wielobicia = None
 
-            # Jeśli brak legalnych ruchów - koniec gry
-            if len(legalne_ruchy) == 0:
-                poprzedni_gracz = 2 if runda % 2 == 0 else 1
+            while True:
+                # Znajdź legalne ruchy
+                if pozycja_dla_wielobicia is not None:
+                    # Podczas wielobicia: sprawdź TYLKO bicia dla tego pionka
+                    legalne_ruchy = []
+                    piece = self.plansza[pozycja_dla_wielobicia[0], pozycja_dla_wielobicia[1]]
+                    if piece in [1, 3]:
+                        legalne_ruchy = self._znajdz_bicia(self.plansza,
+                                                           pozycja_dla_wielobicia[0],
+                                                           pozycja_dla_wielobicia[1],
+                                                           piece)
+                else:
+                    # Normalny ruch: wszystkie legalne ruchy
+                    legalne_ruchy = self.znajdz_legalne_ruchy(self.plansza)
 
-                # Jeśli show=True, wyświetl gratulacje
-                if show:
-                    if notebook:
-                        clear_output(wait=True)
+                # Sprawdź koniec gry lub wielobicia
+                if len(legalne_ruchy) == 0:
+                    if pozycja_dla_wielobicia is not None:
+                        # Koniec wielobicia - brak kolejnych bić
+                        break
                     else:
-                        print("\033[21A", end="")  # Przenieś kursor do góry
+                        # Koniec gry - brak ruchów
+                        poprzedni_gracz = 2 if runda % 2 == 0 else 1
 
-                    # Zamień perspektywę z powrotem do widoku gracza 1
-                    # Jeśli runda jest nieparzysta, plansza jest z perspektywy bot2, trzeba zamienić
-                    # Jeśli runda jest parzysta, plansza jest z perspektywy bot1, NIE zamieniaj
-                    if runda % 2 == 1:
-                        plansza_do_wyswietlenia = self.zamien_perspektywe(self.plansza)
+                        if show:
+                            if notebook:
+                                clear_output(wait=True)
+                            else:
+                                print("\033[21A", end="")
+
+                            if runda % 2 == 1:
+                                plansza_do_wyswietlenia = self.zamien_perspektywe(self.plansza)
+                            else:
+                                plansza_do_wyswietlenia = self.plansza
+
+                            if notebook:
+                                print(f"Runda: {runda} - KONIEC GRY!")
+                                display(HTML("<style>pre, code {font-family: 'Courier New', monospace !important;}</style>"))
+                                self.wyswietl_plansze(plansza_do_wyswietlenia, pokaz_legende=False, notebook=True)
+                                print(f"\n🎉 Gratulacje! Wygrywa Bot {poprzedni_gracz}! 🎉\n")
+                            else:
+                                print(f"\033[KRunda: {runda} - KONIEC GRY!")
+                                self.wyswietl_plansze(plansza_do_wyswietlenia, pokaz_legende=False, notebook=notebook)
+                                print(f"\033[K\n🎉 Gratulacje! Wygrywa Bot {poprzedni_gracz}! 🎉\n")
+
+                        # Zamknij plik debug
+                        if self.debug and self.debug_file:
+                            self.debug_file.write(f"\n\n{'='*70}\n")
+                            self.debug_file.write(f"KONIEC GRY - Wygrywa Bot {poprzedni_gracz}\n")
+                            self.debug_file.write(f"{'='*70}\n")
+                            self.debug_file.close()
+                            print(f"\n[DEBUG] Zapisano historię gry do pliku: debug_gra.txt\n")
+
+                        return poprzedni_gracz
+
+                # Wybierz ruch
+                if len(legalne_ruchy) == 1:
+                    # Ruch automatyczny
+                    wybrany_ruch = legalne_ruchy[0]
+                    if self.debug:
+                        self.move_number += 1
+                        self.debug_file.write(f"\n{'='*70}\n")
+                        self.debug_file.write(f"RUCH #{self.move_number}\n")
+                        self.debug_file.write(f"{'='*70}\n")
+                        self.debug_file.write(f"Ruch automatyczny (tylko 1 możliwy)\n")
+                        self.debug_file.write(f"Dostępne ruchy: {legalne_ruchy}\n")
+                        self.debug_file.write(f"Wybrany ruch: {wybrany_ruch}\n")
+                else:
+                    # Zapytaj bota z timeoutem
+                    aktualny_bot = self.bot1 if runda % 2 == 0 else self.bot2
+                    bot_number = 1 if runda % 2 == 0 else 2
+                    aktualne_time_flags = self.bot1_time_flags if runda % 2 == 0 else self.bot2_time_flags
+
+                    if self.debug:
+                        self.move_number += 1
+                        self.debug_file.write(f"\n{'='*70}\n")
+                        self.debug_file.write(f"RUCH #{self.move_number}\n")
+                        self.debug_file.write(f"{'='*70}\n")
+                        self.debug_file.write(f"Bot{bot_number}\n")
+                        self.debug_file.write(f"Dostępne ruchy ({len(legalne_ruchy)}): {legalne_ruchy}\n")
+
+                    # Wywołaj bota z timeoutem 2x benchmark_time
+                    wybrany_ruch, elapsed_time, timeout_exceeded = self._wywolaj_bota_z_timeoutem(
+                        aktualny_bot, self.plansza, legalne_ruchy, 2 * benchmark_time, bot_number
+                    )
+
+                    # Sprawdź czy przekroczono normalny limit benchmark_time
+                    przekroczono_benchmark = elapsed_time > benchmark_time
+
+                    if self.debug:
+                        self.debug_file.write(f"Czas wykonania: {elapsed_time:.6f}s (limit: {benchmark_time:.6f}s, max: {2*benchmark_time:.6f}s)\n")
+
+                    if timeout_exceeded:
+                        # Przekroczono 2x benchmark - losowy ruch
+                        if self.debug:
+                            self.debug_file.write(f"Status: PRZEKROCZONO 2x LIMIT! Użyto losowego ruchu.\n")
+                    elif przekroczono_benchmark:
+                        # Przekroczono benchmark ale nie 2x
+                        if aktualne_time_flags > 0:
+                            # Ma flagi - akceptuj ruch, pomniejsz flagę
+                            if runda % 2 == 0:
+                                self.bot1_time_flags -= 1
+                            else:
+                                self.bot2_time_flags -= 1
+                            if self.debug:
+                                self.debug_file.write(f"Status: PRZEKROCZONO BENCHMARK! Użyto time_flag (pozostało: {aktualne_time_flags - 1})\n")
+                        else:
+                            # Brak flag - użyj losowego ruchu
+                            wybrany_ruch = random.choice(legalne_ruchy)
+                            if self.debug:
+                                self.debug_file.write(f"Status: PRZEKROCZONO BENCHMARK bez flag! Użyto losowego ruchu.\n")
                     else:
-                        plansza_do_wyswietlenia = self.plansza
+                        # W limicie
+                        if self.debug:
+                            self.debug_file.write(f"Status: W limicie czasu\n")
 
-                    if notebook:
-                        print(f"Runda: {runda} - KONIEC GRY!")
-                        display(HTML("<style>pre, code {font-family: 'Courier New', monospace !important;}</style>"))
-                        self.wyswietl_plansze(plansza_do_wyswietlenia, pokaz_legende=False, notebook=True)
-                        print(f"\n🎉 Gratulacje! Wygrywa Bot {poprzedni_gracz}! 🎉\n")
-                    else:
-                        print(f"\033[KRunda: {runda} - KONIEC GRY!")
-                        self.wyswietl_plansze(plansza_do_wyswietlenia, pokaz_legende=False)
-                        print(f"\033[K\n🎉 Gratulacje! Wygrywa Bot {poprzedni_gracz}! 🎉\n")
+                    if self.debug:
+                        self.debug_file.write(f"Wybrany ruch: {wybrany_ruch}\n")
 
-                return poprzedni_gracz  # Zwróć numer wygrywającego bota
+                # Wykonaj ruch
+                bylo_bicie, pozycja_koncowa = self.update(wybrany_ruch)
 
-            # Wybierz bota na podstawie parzystości rundy
-            aktualny_bot = self.bot1 if runda % 2 == 0 else self.bot2
+                # Sprawdź czy można kontynuować wielobicie
+                if bylo_bicie:
+                    # Podczas wielobicia sprawdzaj TYLKO bicia, nie zwykłe ruchy
+                    piece = self.plansza[pozycja_koncowa[0], pozycja_koncowa[1]]
+                    kolejne_bicia = self._znajdz_bicia(self.plansza, pozycja_koncowa[0], pozycja_koncowa[1], piece)
+                    if len(kolejne_bicia) > 0:
+                        if self.debug:
+                            self.debug_file.write(f">>> Wielobicie - kontynuacja dla pionka na {pozycja_koncowa}\n")
+                        pozycja_dla_wielobicia = pozycja_koncowa
+                        continue
 
-            # Pobierz ruch od bota
-            wybrany_ruch = aktualny_bot.move(self.plansza, legalne_ruchy)
+                # Koniec tury
+                break
 
-            # Zaktualizuj planszę
-            self.update(wybrany_ruch)
-
-            # Zamień perspektywę planszy dla następnego gracza
+            # Zamień perspektywę
+            if self.debug:
+                self.debug_file.write(f"\n{'='*70}\n>>> Zamiana perspektywy\n{'='*70}\n")
             self.plansza = self.zamien_perspektywe(self.plansza)
-
             runda += 1
 
-            # Wyświetl planszę jeśli show=True
+            # Wyświetl planszę
             if show:
                 if notebook:
-                    # W notebooku użyj clear_output
                     clear_output(wait=True)
                 else:
-                    # W terminalu użyj ANSI kodów
                     if not pierwsza_runda:
-                        # Przenieś kursor 21 linii w górę (1 Runda + 20 linii planszy)
                         print("\033[21A", end="")
 
-                # Zamień perspektywę z powrotem do widoku gracza 1
-                # Po rundzie nieparzystej (bot1), plansza jest z perspektywy bot2, więc trzeba zamienić
-                # Po rundzie parzystej (bot2), plansza jest z perspektywy bot1, więc NIE zamieniaj
                 if runda % 2 == 1:
                     plansza_do_wyswietlenia = self.zamien_perspektywe(self.plansza)
                 else:
@@ -431,58 +477,29 @@ class GRA:
                     self.wyswietl_plansze(plansza_do_wyswietlenia, pokaz_legende=pierwsza_runda, notebook=True)
                 else:
                     print(f"\033[KRunda: {runda}")
-                    # Nie pokazuj legendy po pierwszej rundzie
-                    self.wyswietl_plansze(plansza_do_wyswietlenia, pokaz_legende=pierwsza_runda)
+                    self.wyswietl_plansze(plansza_do_wyswietlenia, pokaz_legende=pierwsza_runda, notebook=notebook)
 
                 if pierwsza_runda:
                     pierwsza_runda = False
 
-                # Czekaj
                 time.sleep(show_time)
 
     def wyswietl_plansze(self, plansza=None, pokaz_legende=True, notebook=False):
-        """Wyświetla pełną planszę 8x8 z białymi polami i ładnymi symbolami."""
+        """Wyświetla planszę 8x8."""
         if plansza is None:
             plansza = self.plansza
 
         # Kolory ANSI
         RESET = '\033[0m'
-        RED = '\033[91m'      # Gracz (1)
-        BLUE = '\033[94m'     # Przeciwnik (2)
-        GRAY = '\033[90m'     # Białe pola
+        RED = '\033[91m'
+        BLUE = '\033[94m'
+        GRAY = '\033[90m'
 
         # Symbole
         EMPTY_DARK = '·'
-        EMPTY_LIGHT = ' '
         PIECE = '●'
         KING = '▣'
 
-        # Mapowanie wartości na symbole i kolory
-        symbole = {
-            0: (EMPTY_DARK, ''),           # Puste ciemne pole
-            1: (PIECE, BLUE),                # Pion gracza
-            2: (PIECE, RED),               # Pion przeciwnika
-            3: (KING, BLUE),              # Król gracza
-            4: (KING, RED)                 # Król przeciwnika
-        }
-
-        # Tworzenie pełnej planszy 8x8
-        pelna_plansza = [[None for _ in range(8)] for _ in range(8)]
-
-        # Wypełnianie ciemnych pól
-        for row in range(8):
-            for col_idx in range(4):
-                # Ciemne pola są na różnych pozycjach w zależności od parzystości wiersza
-                if row % 2 == 0:
-                    # Parzyste wiersze: ciemne pola na kolumnach 1, 3, 5, 7
-                    col = col_idx * 2 + 1
-                else:
-                    # Nieparzyste wiersze: ciemne pola na kolumnach 0, 2, 4, 6
-                    col = col_idx * 2
-
-                pelna_plansza[row][col] = plansza[row][col_idx]
-
-        # Wyświetlanie
         clear_line = "" if notebook else "\033[K"
 
         print(f"\n{clear_line}╔═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╗")
@@ -490,33 +507,43 @@ class GRA:
         for row in range(8):
             print(f"{clear_line}║", end="")
             for col in range(8):
-                if pelna_plansza[row][col] is not None:
-                    # Ciemne pole z figurą lub puste
-                    val = pelna_plansza[row][col]
-                    symbol, color = symbole[val]
-                    print(f" {color}{symbol}{RESET} ", end="")
-                else:
-                    # Białe pole
-                    print(f" {GRAY}{EMPTY_LIGHT}{RESET} ", end="")
+                val = plansza[row, col]
+
+                if val is None:
+                    # Białe pole (niedostępne)
+                    print("   ", end="")
+                elif val == 0:
+                    # Puste ciemne pole
+                    print(f" {EMPTY_DARK} ", end="")
+                elif val == 1:
+                    # Pion gracza (niebieski)
+                    print(f" {BLUE}{PIECE}{RESET} ", end="")
+                elif val == 2:
+                    # Pion przeciwnika (czerwony)
+                    print(f" {RED}{PIECE}{RESET} ", end="")
+                elif val == 3:
+                    # Król gracza
+                    print(f" {BLUE}{KING}{RESET} ", end="")
+                elif val == 4:
+                    # Król przeciwnika
+                    print(f" {RED}{KING}{RESET} ", end="")
 
                 if col < 7:
                     print("│", end="")
 
-            print("║", end="")
-            print(f" {row}{clear_line}")  # Numeracja wierszy + wyczyść resztę linii
+            print(f"║ {row}{clear_line}")
 
             if row < 7:
                 print(f"{clear_line}╟───┼───┼───┼───┼───┼───┼───┼───╢")
 
         print(f"{clear_line}╚═══╧═══╧═══╧═══╧═══╧═══╧═══╧═══╝")
-        print(f"{clear_line}  0   1   2   3   4   5   6   7")  # Numeracja kolumn
+        print(f"{clear_line}  0   1   2   3   4   5   6   7")
 
-        # Legenda (opcjonalna)
         if pokaz_legende:
-            print(f"{clear_line}\nLegenda: {BLUE}{PIECE}{RESET} Twój pion  {RED}{PIECE}{RESET} Przeciwnik  "
-                f"{BLUE}{KING}{RESET} Twój król  {RED}{KING}{RESET} Król przeciwnika")
+            print(f"{clear_line}\nLegenda:")
+            print(f"{clear_line}  {BLUE}{PIECE}{RESET} Twój pion  {RED}{PIECE}{RESET} Pion przeciwnika  "
+                  f"{BLUE}{KING}{RESET} Twój król  {RED}{KING}{RESET} Król przeciwnika")
+            print(f"{clear_line}  {EMPTY_DARK} Puste pole  (spacja) Białe pole (niedostępne)")
         else:
-            # Wydrukuj pustą linię zamiast legendy (żeby zachować tę samą liczbę linii)
             if not notebook:
                 print(clear_line)
-
